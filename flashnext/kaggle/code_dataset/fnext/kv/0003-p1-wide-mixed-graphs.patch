@@ -1,0 +1,23 @@
+--- a/vllm/v1/worker/gpu/cudagraph_utils.py
++++ b/vllm/v1/worker/gpu/cudagraph_utils.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import os
+ import gc
+ import itertools
+ from collections import defaultdict
+@@ -344,9 +345,12 @@
+                         descs_by_mode[decode_mode].append(ubatch_desc)
+ 
+             # recoverSSM cannot capture a dummy query wider than its workspace.
++            # FN_PW_WIDE=N (P1, default 0 = stock): also capture mixed (PIECEWISE) graphs up to N tokens with
++            # RecoverSSM; the GDN/attention ops are breakable-graph break points (run eagerly on the real batch)
++            # and kv/0002 zero-fills dummy rows past the spec workspace.
+             if mixed_mode and (
+                 not self.vllm_config.cache_config.use_recoverssm
+-                or num_tokens <= max_decode_tokens
++                or num_tokens <= max(max_decode_tokens, int(os.environ.get("FN_PW_WIDE", "0") or 0))
+             ):
+                 # for PIECEWISE graphs there is no limit on requests when replaying
+                 # i.e. no request padding is needed, so we leave it as None.

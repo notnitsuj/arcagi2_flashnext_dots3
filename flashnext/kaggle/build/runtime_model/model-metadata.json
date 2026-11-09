@@ -1,0 +1,10 @@
+{
+ "ownerSlug": "OWNER",
+ "title": "Flash-Next offline runtime",
+ "slug": "flash-next-offline-runtime",
+ "isPrivate": true,
+ "subtitle": "Offline Python 3.12 environment with vLLM 0.32.0 for Kaggle 4xL4",
+ "description": "# Model Summary\n\nAn offline Python environment for serving Qwen3.8-Flash-Next on Kaggle 4xL4 without internet: a standalone CPython 3.12.14 with vLLM 0.32.0, PyTorch 2.13.0 (CUDA 13.0), FlashInfer 0.7.0.post1 and the FlashInfer sm89 JIT cache, all from their official package indexes and unmodified. Extract fn_py312.tarbin into /tmp (it unpacks to /tmp/fn_py312) and run /tmp/fn_py312/bin/python3.12.\n\n# License\n\nEach bundled package keeps its own open-source license (see LICENSE and the *.dist-info folders).\n",
+ "publishTime": "",
+ "provenanceSources": ""
+}

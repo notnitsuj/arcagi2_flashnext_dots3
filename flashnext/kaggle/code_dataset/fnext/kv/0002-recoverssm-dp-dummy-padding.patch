@@ -1,0 +1,26 @@
+--- a/vllm/model_executor/layers/mamba/gdn/recoverssm_gdn.py
++++ b/vllm/model_executor/layers/mamba/gdn/recoverssm_gdn.py
+@@ -244,10 +244,10 @@
+         and query_start_loc.shape[0] == state_indices.shape[0] + 1,
+         "query metadata is incompatible",
+     )
+-    _require(
+-        total <= state_indices.shape[0] * spec_query_len,
+-        "speculative decode input exceeds its activation capacity",
+-    )
++    # (DP2xTP2 fix) an idle DP rank's dummy batch is padded to the busy rank's token count with fewer
++    # requests, so total can exceed batch * spec_query_len. The kernel only reads/writes each request's own
++    # query_start_loc window; rows past that capacity are padding and are zero-filled below instead of raising.
++    _pad_from = state_indices.shape[0] * spec_query_len
+     _dev = q.device
+     _require(
+         all(
+@@ -278,6 +278,8 @@
+         "output shape or layout is incompatible",
+     )
+     batch = state_indices.shape[0]
++    if _pad_from < total:
++        out.zero_()  # dummy batch only; also covers padding inside a request window (never written)
+     if total == 0 or batch == 0:
+         return out
+     BK = triton.next_power_of_2(K)

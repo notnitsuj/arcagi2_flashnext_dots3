@@ -1,0 +1,5 @@
+[project]
+name = "arcstats"
+version = "0.1"
+[project.entry-points."vllm.general_plugins"]
+arcstats = "arcstats:register"

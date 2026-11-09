@@ -1,0 +1,66 @@
+import json, re
+TOOL = {'type': 'function', 'function': {'name': 'python', 'description': "Run Python 3 code (numpy available) in a fresh sandbox; nothing persists between calls, so always send the complete program. Pre-loaded variables: `train` (list of {'input': grid, 'output': grid}) and `test_inputs` (list of test input grids); grids are lists of lists of ints 0-9. Printed output is returned. If the code defines `transform(grid)`, it is automatically run on every training input and compared with the expected output (failures are shown as a diff), and on every test input.", 'parameters': {'type': 'object', 'properties': {'code': {'type': 'string', 'description': 'Python code'}}, 'required': ['code']}}}
+SYSTEM = 'You are an expert at solving ARC-AGI puzzles by writing Python programs. Each puzzle has a few input->output example pairs that share one hidden transformation rule. Grids are 2D lists of integers 0-9 (colours); 0 is usually the background.'
+INSTRUCTIONS = 'Find the transformation rule that maps EVERY example input to its output, and express it as a Python function `def transform(grid: list[list[int]]) -> list[list[int]]`.\n\nUse the python tool to test your program: it runs transform on every training input, tells you which examples match and shows where the wrong cells are, and runs it on the test input(s). Explore the data with code whenever that is faster than reasoning by hand (counting, finding objects, comparing grids). Fix the program until it reproduces EVERY training example exactly.\n\nIn the python tool the task data is ALREADY LOADED: `train` (list of {"input": grid, "output": grid}, in the order shown below) and `test_inputs` (list of grids), grids as lists of lists of ints. Never copy grids into your code; use these variables. Each call starts fresh, so include the full transform definition in every call.\n\nThe rule must be general: do not hard-code example outputs, and make sure it also makes sense for the test input(s), which may differ in size or content from the examples.\n\nIf you cannot get a program to pass all examples, finish with your best prediction: for each test input in order, the output grid as JSON (a list of rows) in its own ```json block.'
+EARLY = "\n\nWork iteratively: as soon as you have a plausible hypothesis, write it as transform() and run it. The checker's diff tells you quickly which part of the hypothesis is wrong; do not try to settle every detail in your head first. Prefer several short think-test cycles over one long analysis."
+AK_HELP = "arckit is pre-loaded as `ak` (numpy only; scipy is not available: use ak.objects for labelling and\nak.enclosed for hole filling). Grids in: lists or arrays; grids out: new numpy int arrays (.tolist() for lists).\nBoxes are (r0, c0, r1, c1) inclusive; coordinates (row, col).\n ak.describe(train, test_inputs) -> str: size rule, per-pair diffs, objects, invariants holding on all pairs\n ak.check(transform, train, test_inputs): per-pair diffs + warnings on test outputs (shape rule, palette,\n     output == input, ...); with def transform(grid, train=None) it also runs leave-one-out\n ak.objects(g, bgc=None, diag=False, multicolour=False) -> [Obj] largest first; Obj fields: colour colours size\n     box r0 c0 r1 c1 h w cells mask sub shape_key holes border rect sym center slice\n ak.diff(a, b) -> changed cells, (from,to) counts, box, shape relation\n ak.obj_diff(a, b) -> [('same'|'moved'|'recoloured'|'reshaped'|'deleted'|'created', obj_a, obj_b, ...)]\n ak.bg(g) ak.task_bg(train) ak.palette(g) ak.counts(g) ak.bbox(mask) ak.crop(g, box) ak.trim(g)\n ak.d8(g) -> {id rot90 rot180 rot270 flipud fliplr transpose antitranspose: grid}; ak.d8(g, 'rot90')\n ak.scale(g, k) ak.downscale(g, k) ak.tile(g, ny, nx) ak.paste(dst, src, r, c, skip=None)\n ak.find_sub(big, small, wildcard=None) -> [(r, c)]  ak.flood(g, r, c, colour)  ak.enclosed(g) -> hole mask\n ak.line(g, r0, c0, r1, c1, colour)  ak.ray(g, r, c, dr, dc, colour, stop=None)  ak.move(g, obj, dr, dc)\n ak.gravity(g, 'down'|'up'|'left'|'right', rigid=False)  (rigid=True: whole objects fall until blocked)\n ak.show(g, coords=True) -> str with row/col indices\n ak.split_grid(g) -> {rows cols colour boxes cells} for full separator lines, or None\n ak.period(g, ignore=None) -> (pr, pc)  ak.repair_period(g, ignore)  ak.symmetries(g, ignore=None)\n ak.complete_symmetry(g, ignore)  ak.size_rule(train).predict(g)  ak.color_map(train)  ak.invariants(train)"
+AK = '\n\nThe python tool also pre-loads a helper library and Counter, defaultdict, deque. Use its tested helpers instead of re-implementing them (object extraction, diffs, symmetry, periodicity, ...):\n' + AK_HELP + '\nA good first call is `print(ak.describe(train, test_inputs))`. Never return the input unchanged (or any fixed grid) as a fallback inside transform: if your rule cannot handle a test input, the rule is incomplete. When transform passes every example, the checker also compares your test outputs with properties that every training pair has and warns when they break.'
+GEN = '\n\nGeneralisation rules: derive colours, positions and counts from the input (no literal tables or branches that exist for a single example); decide object roles by function (shape, size, contact, enclosure), never by scan order, colour number or being the most frequent colour; anchor offsets to the relevant object, not to the grid origin; treat objects clipped by the border as partial evidence.'
+VARIANTS = {'v1': '', 'v2': EARLY, 'ak': AK, 'v2ak': EARLY + AK, 'akp': AK, 'g': GEN, 'akg': AK + GEN}
+FACTS = {'akp'}
+
+def show(g, name):
+    return f'{name} ({len(g)}x{len(g[0])}):\n' + '\n'.join((''.join((str(v) for v in r)) for r in g))
+
+def task_prompt(task, variant='v1'):
+    parts = [INSTRUCTIONS + VARIANTS[variant], '']
+    for i, p in enumerate(task['train'], 1):
+        parts += [f'## Example {i}', show(p['input'], 'Input'), show(p['output'], 'Output'), '']
+    for j, t in enumerate(task['test'], 1):
+        parts += [f'## Test input {j}', show(t['input'], 'Input'), '']
+    if variant in FACTS:
+        import arckit
+        parts += ['## Computed facts (ak.describe)', arckit.describe(task['train'], [t['input'] for t in task['test']])]
+    return '\n'.join(parts).rstrip()
+
+def _valid(g):
+    return isinstance(g, list) and 0 < len(g) <= 30 and all((isinstance(r, list) and 0 < len(r) <= 30 for r in g)) and (len({len(r) for r in g}) == 1) and all((isinstance(v, int) and 0 <= v <= 9 for r in g for v in r))
+
+def parse_grids(text):
+    out = []
+    for blk in re.findall('```(?:json)?\\s*\\n(.*?)```', text, re.S):
+        try:
+            g = json.loads(blk.strip())
+        except Exception:
+            continue
+        if _valid(g):
+            out.append(g)
+        elif isinstance(g, list) and g and all((_valid(x) for x in g)):
+            out.extend(g)
+    if out:
+        return out
+    for m in reversed(list(re.finditer('\\[\\s*\\[[\\d\\s,\\[\\]]*\\]\\s*\\]', text))):
+        try:
+            g = json.loads(m.group(0))
+        except Exception:
+            continue
+        if _valid(g):
+            return [g]
+    return []
+
+def extract_code(seg):
+    i = seg.rfind('<tool_call>')
+    t = seg[i:] if i >= 0 else seg
+    m = re.search('<parameter=code>\\n?', t)
+    if not m:
+        m2 = re.search('```python\\n(.*?)```', t, re.S)
+        return m2.group(1) if m2 else None
+    t = t[m.end():]
+    cut = [t.find(x) for x in ('</parameter>', '</function>', '</tool_call>')]
+    cut = [c for c in cut if c >= 0]
+    if cut:
+        t = t[:min(cut)]
+    t = t.rstrip('\n')
+    t = re.sub('^\\s*```(?:python)?\\s*\\n', '', t)
+    t = re.sub('\\n```\\s*$', '', t)
+    return t if t.strip() else None

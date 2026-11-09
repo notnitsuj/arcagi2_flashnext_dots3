@@ -1,0 +1,186 @@
+Changes to vLLM 0.30.0 (the PyPI wheel) for serving Dots3-Note on 4xL4.
+Apply inside site-packages: patch -p1 < vllm-0.30.0.patch. The patched files are next to this file, under vllm/.
+
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py
+@@ -688,6 +688,11 @@
+         if not handle.host_mirror_required:
+             return
+         if layer_index in self._per_layer_mirrored:
++            # ARC: piecewise-cudagraph warmup/capture runs attention eagerly without the
++            # connector's per-forward clear; a repeated mirror there is a no-op.
++            import os as _os
++            if _os.environ.get("ARC_HISPARSE_TOLERATE_REMIRROR") == "1":
++                return
+             raise RuntimeError(f"HiSparse layer {layer_index} mirrored twice.")
+         state = self._slot_mapping_staging
+         if state is not None and state.num_tokens:
+--- a/vllm/model_executor/layers/attention/sparse_mla_attention.py
++++ b/vllm/model_executor/layers/attention/sparse_mla_attention.py
+@@ -693,7 +693,8 @@
+                 index_group_builder.register_layer(
+                     indexer is not None,
+                     vllm_config,
+-                    head_size=head_size,
++                    # ARC: Dots3 stores sparse rows padded to the SWA row width
++                    head_size=int(__import__("os").environ.get("ARC_HISPARSE_ROW", head_size)),
+                     kv_cache_dtype=kv_cache_dtype,
+                 )
+             )
+--- a/vllm/models/dots3_note/nvidia/attention.py
++++ b/vllm/models/dots3_note/nvidia/attention.py
+@@ -640,9 +640,10 @@
+                 if hasattr(self.kv_b_proj, "weight")
+                 else self.kv_b_proj.params_dtype
+             )
++            # Only cast for floating weights: weight-only FP8 Marlin (SM89/L4) repacks the weight into int32.
+             if (
+                 use_fp8_prefill or weight_dtype != current_platform.fp8_dtype()
+-            ) and weight_dtype != torch.uint8:
++            ) and weight_dtype.is_floating_point:
+                 kv_c = kv_c.to(weight_dtype)
+             k_pe_chunk = workspace[:toks, self.kv_lora_rank :].unsqueeze(1)
+             kv_nope = self.kv_b_proj(kv_c)[0].view(
+--- a/vllm/models/dots3_note/nvidia/model.py
++++ b/vllm/models/dots3_note/nvidia/model.py
+@@ -3,6 +3,7 @@
+ """NVIDIA implementation of the Dots3Note language model."""
+ 
+ import copy
++import os
+ from collections.abc import Iterable, Iterator
+ from dataclasses import replace
+ 
+@@ -434,6 +435,14 @@
+         if cache_config.cache_dtype == "fp8_ds_mla":
+             cache_config = copy.copy(cache_config)
+             cache_config.cache_dtype = "fp8"
++        # ARC/L4 patch: the SWA prefill gather has no FP8 path for 1088-wide rows; SWA KV is
++        # window-bounded (513 tokens), so keep it BF16 and use FP8 only for the dense layers.
++        if ((os.environ.get("ARC_DOTS3_DENSE") == "1" or os.environ.get("ARC_DOTS3_PORTABLE_DSA") == "1")
++                and config.sliding_window_size is not None
++                and os.environ.get("ARC_SWA_FP8") != "1"
++                and str(cache_config.cache_dtype).startswith("fp8")):
++            cache_config = copy.copy(cache_config)
++            cache_config.cache_dtype = "auto"
+         apply_rescale = config.apply_mla_qkv_lora_rescale
+         self.hidden_size = config.hidden_size
+         self.num_heads = num_heads // tp_size
+--- a/vllm/models/dots3_note/nvidia/mtp.py
++++ b/vllm/models/dots3_note/nvidia/mtp.py
+@@ -172,6 +172,11 @@
+     ) -> Iterator[tuple[str, torch.Tensor]]:
+         mtp_layer = self.config.num_hidden_layers
+         for name, weight in weights:
++            # ARC fix: the MTP head has its own embedding (model.mtp.embed_tokens). The base
++            # loader also maps the main model.embed_tokens onto the same parameter, and since
++            # the main table sits in a later shard it overwrote the MTP table (acceptance ~12%).
++            if name.startswith("model.embed_tokens."):
++                continue
+             if name.startswith("model.mtp.embed_tokens."):
+                 name = name.replace(
+                     "model.mtp.embed_tokens.",
+--- a/vllm/v1/attention/ops/xpu_mla_sparse.py
++++ b/vllm/v1/attention/ops/xpu_mla_sparse.py
+@@ -32,6 +32,7 @@
+     stride_indices_token,
+     stride_indices_head,
+     sm_scale,
++    kv_scale,
+     kv_group_num: tl.constexpr,
+     index_topk: tl.constexpr,
+     BLOCK_H: tl.constexpr,  # block size for num heads
+@@ -97,7 +98,7 @@
+         mask_kv = (indices >= 0) & (indices < seq_kv)
+         mask_kv_d = mask_dmodel
+         offs_k = (
+-            indices[None, :] * stride_k_token
++            indices[None, :].to(tl.int64) * stride_k_token
+             + cur_kv_head_id * stride_k_head
+             + offs_d[:, None]
+         )
+@@ -111,7 +112,7 @@
+         if BLOCK_DPE > 0:
+             # q_rope @ k_rope
+             offs_kpe = (
+-                indices[None, :] * stride_k_token
++                indices[None, :].to(tl.int64) * stride_k_token
+                 + cur_kv_head_id * stride_k_head
+                 + offs_dpe[:, None]
+             )
+@@ -130,7 +131,7 @@
+         # load v
+         mask_v_d = offs_dv < dim_v
+         offs_v = (
+-            indices[:, None] * stride_v_token
++            indices[:, None].to(tl.int64) * stride_v_token
+             + cur_kv_head_id * stride_v_head
+             + offs_dv[None, :]
+         )
+@@ -145,7 +146,7 @@
+         acc *= re_scale[:, None]
+ 
+         # score @ v
+-        acc += tl.dot(p.to(v.dtype), v)
++        acc += tl.dot(p.to(tl.bfloat16), v.to(tl.bfloat16))
+ 
+         # update global sum and max
+         e_sum = e_sum * re_scale + tl.sum(p, 1)
+@@ -153,6 +154,7 @@
+ 
+     # rescaling
+     acc /= e_sum[:, None]
++    acc *= kv_scale
+ 
+     max_logits = e_max * LOGE2
+     # calculate lse
+@@ -184,6 +186,7 @@
+     sm_scale: float,
+     d_v: int = 512,
+     block_dpe: int = 64,
++    kv_scale: float = 1.0,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+     """
+     out : [num_tokens, num_heads_q, d_v]
+@@ -216,7 +219,7 @@
+     assert num_heads_kv == 1, "only support kv head = 1 for now"
+     assert index_topk % BLOCK_N == 0, "index_topk must be multiple of BLOCK_N"
+ 
+-    sm_scale *= LOG2E
++    sm_scale *= LOG2E * kv_scale
+ 
+     kv_group_num = num_heads_q // num_heads_kv
+     grid = (
+@@ -260,6 +263,7 @@
+         stride_indices_token=indices.stride(0),
+         stride_indices_head=indices.stride(1),
+         sm_scale=sm_scale,
++        kv_scale=kv_scale,
+         kv_group_num=kv_group_num,
+         index_topk=index_topk,
+         BLOCK_H=BLOCK_H,
+--- a/vllm/v1/hisparse/runtime.py
++++ b/vllm/v1/hisparse/runtime.py
+@@ -61,7 +61,8 @@
+ def _get_max_swap_rows(vllm_config: VllmConfig) -> int:
+     max_query_len = _get_max_decode_query_len(vllm_config)
+     scheduler_config = vllm_config.scheduler_config
+-    return min(
++    import os as _os  # ARC: headroom for profiling/ragged spec-decode batches
++    return int(_os.environ.get("ARC_HISPARSE_SWAP_MULT", "1")) * min(
+         scheduler_config.max_num_batched_tokens,
+         scheduler_config.max_num_seqs * max_query_len,
+     )
+@@ -869,6 +870,12 @@
+     def _step_rows(self, num_tokens: int) -> slice:
+         start = self._swap_step * num_tokens
+         stop = start + num_tokens
++        if (stop > self.index_group.shared_topk.physical_topk_indices.shape[0]
++                and __import__("os").environ.get("ARC_HISPARSE_TOLERATE_REMIRROR") == "1"
++                and num_tokens <= self.index_group.shared_topk.physical_topk_indices.shape[0]):
++            # ARC: warmup/capture forwards skip begin_forward(); restart the per-forward row cursor
++            self._swap_step = 0
++            start, stop = 0, num_tokens
+         if stop > self.index_group.shared_topk.physical_topk_indices.shape[0]:
+             raise ValueError(
+                 "HiSparse swap rows exceed the configured speculative decode "

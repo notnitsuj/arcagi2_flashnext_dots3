@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+# default working, model and data directories of the recipes (FN_WORK/D3_WORK, FN_BASE_MODEL/D3_BASE_MODEL, ARC_DATA),
+# relative to the folder the commands run from
+/work/
+/models/
+/data/
+/flashnext/work/
+/flashnext/models/
+/flashnext/data/
+/dotsnote/work/
+/dotsnote/models/
+/dotsnote/data/
+*.tarbin

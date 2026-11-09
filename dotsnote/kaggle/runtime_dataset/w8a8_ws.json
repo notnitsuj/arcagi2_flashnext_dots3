@@ -1,0 +1,157 @@
+{
+ "5120:2048": {
+  "48": {
+   "BM": 32,
+   "NSUB": 1,
+   "BN": 128,
+   "SPLIT_K": 1,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": {
+   "BM": 32,
+   "NSUB": 3,
+   "BN": 128,
+   "SPLIT_K": 1,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 2
+  },
+  "1024": null
+ },
+ "5120:4096": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "2112:5120": {
+  "48": {
+   "BM": 32,
+   "NSUB": 1,
+   "BN": 32,
+   "SPLIT_K": 1,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": null,
+  "1024": null
+ },
+ "64:5120": {
+  "48": {
+   "BM": 16,
+   "NSUB": 1,
+   "BN": 32,
+   "SPLIT_K": 16,
+   "FUSE_Q": 1,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": {
+   "BM": 16,
+   "NSUB": 3,
+   "BN": 32,
+   "SPLIT_K": 6,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "1024": null
+ },
+ "768:5120": {
+  "48": {
+   "BM": 16,
+   "NSUB": 1,
+   "BN": 32,
+   "SPLIT_K": 2,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": null,
+  "1024": null
+ },
+ "5120:384": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "4096:1024": {
+  "48": {
+   "BM": 16,
+   "NSUB": 1,
+   "BN": 128,
+   "SPLIT_K": 1,
+   "FUSE_Q": 1,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": null,
+  "1024": null
+ },
+ "128:5120": {
+  "48": {
+   "BM": 16,
+   "NSUB": 1,
+   "BN": 32,
+   "SPLIT_K": 12,
+   "FUSE_Q": 1,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "192": {
+   "BM": 64,
+   "NSUB": 1,
+   "BN": 32,
+   "SPLIT_K": 4,
+   "FUSE_Q": 0,
+   "num_warps": 4,
+   "num_stages": 3
+  },
+  "1024": null
+ },
+ "1600:5120": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "6144:1024": {
+  "48": {
+   "BM": 16,
+   "NSUB": 1,
+   "BN": 64,
+   "SPLIT_K": 1,
+   "FUSE_Q": 1,
+   "num_warps": 4,
+   "num_stages": 2
+  },
+  "192": null,
+  "1024": null
+ },
+ "8192:1024": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "5120:1024": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "6912:5120": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "5120:3456": {
+  "48": null,
+  "192": null,
+  "1024": null
+ },
+ "5120:10240": {
+  "48": null,
+  "192": null,
+  "1024": null
+ }
+}

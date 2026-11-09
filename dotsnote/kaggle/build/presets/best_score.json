@@ -1,0 +1,54 @@
+{
+ "preset": "best_score",
+ "configuration": "v22c (public score 63.47, submitted from an earlier notebook)",
+ "derived_from": "mode_submit.json of runtime dataset version 5 (the best_throughput preset, notebook version 4)",
+ "release_mode_sha256": "f97ba865ff8ed6bf1032947e2518ac0fcb56700039c875eef6988470af7d6f8d",
+ "reference": "v22c_mode.json",
+ "reference_may_differ": [
+  "note",
+  "prefetch",
+  "startup_guard",
+  "triton_cache_tar",
+  "ready_poll_s"
+ ],
+ "changes": {
+  "deadline_total_s": 41400,
+  "startup_guard": {
+   "deadline_abs_s": 41700
+  },
+  "solve_args": {
+   "--budget-margin-s": null
+  },
+  "env": {
+   "ARC_AR_LB": null,
+   "ARC_AR_LB_MAIN": null,
+   "ARC_AR_LB_EF": null,
+   "ARC_AR_LB_HAD": null,
+   "ARC_KVB_REBUILD": null,
+   "ARC_PENALTY_LAZY": null,
+   "ARC_MLA_WS_TOKENS": null,
+   "ARC_PARAM_COMPACT": null,
+   "ARC_OFFLOAD_CCACHE": null,
+   "ARC_OFFLOAD_PF_OUT": null,
+   "ARC_OFFLOAD_CACHE_ROWS_L": "0:142000,1:232000,5:232000,9:232000,13:232000,17:232000,21:232000,25:232000,29:232000,33:232000,37:232000,41:232000,45:232000"
+  },
+  "note": "Dots3-Note lb144r on 4xL4: best_score mode (the v22c serving and solver settings on the release runtime, with its startup guard and staging)."
+ },
+ "why": {
+  "deadline_total_s": "v22c's solver budget from the launcher start (release: 42150)",
+  "startup_guard.deadline_abs_s": "cap that goes with a 41,400 s budget, as in notebook versions 1-2 (release: 42150)",
+  "solve_args.--budget-margin-s": "v22c passed none: solve.py's default margin of 600 s (release: 300)",
+  "env.ARC_AR_LB": "lower-bit host all-reduce off: 6 bits on every path, as v22c (changes numerics)",
+  "env.ARC_AR_LB_MAIN": "main-path width of the lower-bit all-reduce (4f/5)",
+  "env.ARC_AR_LB_EF": "its error feedback",
+  "env.ARC_AR_LB_HAD": "its Hadamard rotation",
+  "env.ARC_KVB_REBUILD": "memory reclaim off (bit-exact when on)",
+  "env.ARC_PENALTY_LAZY": "memory reclaim off (bit-exact when on)",
+  "env.ARC_MLA_WS_TOKENS": "memory reclaim off (bit-exact when on)",
+  "env.ARC_PARAM_COMPACT": "memory reclaim off (bit-exact when on)",
+  "env.ARC_OFFLOAD_CCACHE": "compact GPU row cache off (bit-exact when on)",
+  "env.ARC_OFFLOAD_PF_OUT": "preallocated prefill attention output off (bit-exact when on)",
+  "env.ARC_OFFLOAD_CACHE_ROWS_L": "v22c's row caches, full-width rows (release: 202000 / 362600 compact rows)",
+  "note": "describes the mode; no code reads it"
+ }
+}

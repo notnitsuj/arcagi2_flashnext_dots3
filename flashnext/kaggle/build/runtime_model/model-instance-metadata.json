@@ -1,0 +1,14 @@
+{
+ "ownerSlug": "OWNER",
+ "modelSlug": "flash-next-offline-runtime",
+ "instanceSlug": "py312-cu130",
+ "framework": "other",
+ "overview": "fn_py312.tarbin: CPython 3.12.14 + vLLM 0.32.0 + PyTorch 2.13.0+cu130 + FlashInfer 0.7.0.post1 (+ sm89 JIT cache). Extract into /tmp.",
+ "usage": "# Usage\n\ntar -C /tmp -xf fn_py312.tarbin && /tmp/fn_py312/bin/python3.12 -m vllm.entrypoints.openai.api_server ...\n\n# License\n\nBundled packages keep their own open-source licenses (LICENSE file).\n",
+ "licenseName": "Other",
+ "fineTunable": false,
+ "trainingData": [],
+ "modelInstanceType": "Unspecified",
+ "baseModelInstance": "",
+ "externalBaseModelUrl": ""
+}

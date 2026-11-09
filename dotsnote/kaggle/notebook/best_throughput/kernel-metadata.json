@@ -1,0 +1,30 @@
+{
+  "id": "notnitsuj/dots3-note-arc-agi-2",
+  "id_no": 140361458,
+  "title": "Dots3-Note ARC-AGI-2",
+  "code_file": "dots3-note-arc-agi-2.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [
+    "gpu"
+  ],
+  "dataset_sources": [
+    "notnitsuj/dots3-note-arc-runtime"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-2"
+  ],
+  "model_sources": [
+    "notnitsuj/dots3-note-lb144r/PyTorch/lb144r-p2/1",
+    "notnitsuj/dots3-note-lb144r/PyTorch/lb144r-p3/1",
+    "notnitsuj/dots3-note-lb144r/PyTorch/lb144r-p4/1",
+    "notnitsuj/dots3-note-lb144r/PyTorch/lb144r-p1/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:9a6bcfda6d03b2cd9aa347ee8c1bae62043328ed0f4afe9bda014e4f8bbf9435",
+  "machine_shape": "NvidiaL4"
+}

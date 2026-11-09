@@ -1,0 +1,2 @@
+# compiled modules: built by build_kernels.sh (or taken from the runtime dataset), not tracked
+arcstats_pkg/arcstats/*.so

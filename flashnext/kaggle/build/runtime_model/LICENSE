@@ -1,0 +1,3 @@
+This archive bundles unmodified third-party open-source Python packages (CPython 3.12 standalone build, vLLM 0.32.0,
+PyTorch 2.13.0, FlashInfer 0.7.0.post1 and their dependencies), each under its own license, as recorded in the
+package metadata (*.dist-info) inside the archive.

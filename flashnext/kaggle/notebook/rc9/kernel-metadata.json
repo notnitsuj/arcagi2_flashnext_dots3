@@ -1,0 +1,40 @@
+{
+  "id": "notnitsuj/flash-next-arc-eval",
+  "id_no": 141698087,
+  "title": "Flash-Next ARC eval",
+  "code_file": "flash-next-arc-eval.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [
+    "gpu"
+  ],
+  "dataset_sources": [
+    "notnitsuj/flash-next-arc-code"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-2"
+  ],
+  "model_sources": [
+    "notnitsuj/flash-next-offline-runtime/Other/py312-cu130/1",
+    "notnitsuj/qwen38-flash-next-fp8-core/PyTorch/ple-p1/1",
+    "notnitsuj/qwen38-flash-next-fp8-core/PyTorch/ple-p3/1",
+    "notnitsuj/qwen38-flash-next-fp8-core/PyTorch/ple-p2/1",
+    "notnitsuj/qwen38-flash-next-fp8-core/PyTorch/w-p1/1",
+    "notnitsuj/qwen38-flash-next-fp8-core/PyTorch/ple-p4/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-p2/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-r1b-mtp2-p1/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-r11c-d-p3/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-r11c-d-p2/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-r11c-d-p1/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-p3/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-p4/1",
+    "notnitsuj/qwen38-flash-next-experts/PyTorch/k320-q34-p1/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:9a6bcfda6d03b2cd9aa347ee8c1bae62043328ed0f4afe9bda014e4f8bbf9435",
+  "machine_shape": "NvidiaL4"
+}

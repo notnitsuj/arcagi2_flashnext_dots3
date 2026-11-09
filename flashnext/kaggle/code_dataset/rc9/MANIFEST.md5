@@ -1,0 +1,16 @@
+20af5540836eb314d0612aad0ed65dc3  arckit.py
+6f47add61aeac64b7abfa0c0d009d019  delta_build.py
+2c0705ad1af25f03f8f5c534920d6210  fn_cache.tarbin
+262b915abfffdd7d02dc38913d1b6610  fn_preflight.py
+e874abcef6c741df572102dbd9b6e555  fn_runtime.json
+1beb18ac3f1a37e89f1f57161a5d1b64  fnext.tarbin
+1c580b9ac02ec47f53a2936477c32282  hot32k_tr.pt
+a4945bfc84e04fb6c0f972d45c1f0dc9  k2_l4cfg.json
+c48660a43a3097ded5c535788dedc7bb  kaggle_fn.sh
+b1ba9f03f3f83adebd804b94b92bb645  repl_d3fmt.py
+d1bdc04d1b86857bd97912ffdf45d170  repl_dsession.py
+73b387674b4fb195a85b27985e49383b  repl_prompt.py
+f9f56d9c800bcb7bf67b6295004cf4bc  repl_sandbox.py
+8cb388a391cbdd17e13f4d88727b4f39  repl_session.py
+a032004edd1e3ffd716ea22d6ca88d40  repl_solve.py
+64c69ca08ccb5d640328bdb27ba0714c  repl_vote.py

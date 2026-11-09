@@ -1,0 +1,18 @@
+--- a/vllm/models/qwen4_exp/nvidia/model.py	2026-10-27 09:02:26.478281897 +0000
++++ b/vllm/models/qwen4_exp/nvidia/model.py	2026-10-27 09:02:26.489281978 +0000
+@@ -647,6 +647,15 @@
+         return sample_hidden_states
+ 
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
++        import os as _os
++        if _os.environ.get("FNEXT_DEV_TRUNC") == "1":
++            # truncated-layer model, drop checkpoint layers beyond num_hidden_layers
++            import re as _re
++            _nl = self.config.num_hidden_layers
++            def _keep(name):
++                m = _re.search(r"(?:^|\.)layers\.(\d+)\.", name)
++                return m is None or name.startswith("mtp") or int(m.group(1)) < _nl
++            weights = ((n, w) for n, w in weights if _keep(n))
+         weights = (
+             (
+                 _remap_qsa_cache_scale_name(name, self._qsa_layer_ids),

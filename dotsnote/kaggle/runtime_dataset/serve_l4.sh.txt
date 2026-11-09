@@ -1,0 +1,23 @@
+#!/bin/bash
+# Dots3 k128 INT4 build in the 4xL4 configuration (TP4): portable SM89 DSA + sparse-aware host KV offload + MTP3,
+# host-resident embeddings, trimmed workspaces and CUDA-graph sizes. Fits 22.5 GiB/GPU (L4) with ~4 GiB KV.
+# FlashInfer allreduce+RMSNorm fusion is off: L4 has no NVSwitch, and on NVSwitch hosts its workspace eats ~4 GiB.
+# usage: dots3/serve_l4.sh <gpus> <port> <ckpt> [extra vllm args]
+#   env L4_GIB (default 20.9 = 0.95 x the 22.03 GiB a Kaggle L4 reports): absolute per-GPU budget; UTIL is derived from the
+#   local GPU's total memory so the emulation is host-independent (an L4 itself gets UTIL ~0.96). UTIL overrides.
+gpus=$1; port=$2; ckpt=$3; shift 3
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+n=$(echo $gpus | tr ',' '\n' | wc -l)
+g0=$(echo $gpus | cut -d, -f1)
+tot_mib=$(nvidia-smi -i $g0 --query-gpu=memory.total --format=csv,noheader,nounits)
+UTIL=${UTIL:-$(python3 -c "print(round(${L4_GIB:-20.9} * 1024 / $tot_mib, 4))")}
+echo "serve_l4: budget ${L4_GIB:-20.9} GiB/GPU of $tot_mib MiB -> UTIL=$UTIL"
+exec env ARC_FORCE_FP8_MARLIN=${FORCE_MARLIN:-1} ARC_EMULATE_SM89=${EMULATE_SM89:-0} ARC_EMULATE_GPU_GIB=${EMULATE_GPU_GIB-21.4} ARC_DOTS3_PORTABLE_DSA=1 ARC_DOTS3_OFFLOAD=1 ARC_OFFLOAD_CACHE_ROWS=${CACHE_ROWS:-65536} \
+  ARC_EMBED_HOST=1 ARC_INDEXER_PREFILL_MULT=4 VLLM_SPARSE_INDEXER_MAX_LOGITS_MB=128 \
+  UTIL=$UTIL VLLM_ENGINE_READY_TIMEOUT_S=5400 \
+  $ROOT/serve.sh $gpus $port $ckpt --tensor-parallel-size $n \
+  --language-model-only --trust-remote-code --disable-custom-all-reduce --kv-cache-dtype fp8 \
+  --max-num-batched-tokens ${CHUNK:-1024} --max-num-seqs ${SEQS:-64} --max-model-len ${MAXLEN:-262144} \
+  --kernel-config '{"enable_flashinfer_autotune": false}' --attention-config "{\"flash_attn_version\": ${FA_VERSION:-2}}" \
+  --compilation-config '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[8,16,32,64,128,256],"pass_config":{"fuse_allreduce_rms":false}}' \
+  --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP:-3}}" "$@"

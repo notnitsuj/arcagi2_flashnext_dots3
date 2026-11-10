@@ -24,7 +24,7 @@ Our final solution. A program-writing agent runs on Qwen3.8-Flash-Next, a 125B m
 | Path | What it holds |
 |---|---|
 | [`kaggle/`](kaggle/README.md) | The submission: the RC8 and RC9 notebooks and the exact code dataset they ran, with the engine plugin `fnext`, the agent, `ak` and the launcher. RC8's files are the default; [`kaggle/code_dataset/rc9/`](kaggle/code_dataset/rc9/) holds RC9's two changed files. Also the tools that build every Kaggle artifact: core split, model parts, offline runtime, code dataset, compile cache, notebook and validation check. |
-| [`training/`](training/README.md) | How the model parts were made: self-generated traces, routing capture, keep set, GPTQ, RL in the agent loop, the RL delta, the draft head, and the evaluation protocol. |
+| [`training/`](training/README.md) | How the model parts were made: self-generated traces, routing capture, keep set, GPTQ, RL in the agent loop, the RL delta, the draft head, and the evaluation protocol. Step 10 is the distillation we tried before RL; the shipped model does not use it. |
 | [`MODEL_LICENSE`](MODEL_LICENSE) | The Qwen Community License 1.0, which covers every model part. |
 
 ## Reproducing

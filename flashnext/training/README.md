@@ -72,7 +72,7 @@ the directory you run from, and all commands below run from the `flashnext/` fol
 | `QR_ARCKIT` | unset; `block` in `rl/rollout.sh` | harness: `block` (the shipped setting) loads the `ak` library, and a program that breaks a training-pair invariant on a test output does not count as verified |
 | `QR_ARCKIT_PATH` | `kaggle/code_dataset/arckit.py` of this repository | the `ak` library (the exact file the submission ships) |
 | `MTP_KV_FP8` | `0` | draft-head training: emulate the FP8 KV cache (`1` in the shipped runs) |
-| `KD_PAD`, `KD_PLE_SHM` | `2048` (`4096` in `rl/train_rl.sh`), `/dev/shm/ple` | student: sequence padding; RAM copy of the n-gram table |
+| `KD_PAD`, `KD_PLE_SHM` | `2048` (`4096` in `rl/train_rl.sh` and `kd/train_kd.sh`), `/dev/shm/ple` | student: sequence padding; RAM copy of the n-gram table |
 
 Script-specific variables (GPU ids, ports, inputs) are listed in each script's header and in the reference table at
 the end.
@@ -553,6 +553,116 @@ Other tools:
   (reference `r_fp8`).
 - `eval/fmt_check.py` reports tool-format errors and verified precision of a pool.
 
+### 10. Distillation toward the FP8 model (not used)
+
+Before RL, distillation was tried as a direct repair of k320q34's compression error: token-level KL toward the FP8
+model on its own step-1 traces, with the same trainable set as RL. It removed 36% of the KL above the student's
+forward-mismatch floor, but REPL pass@2 at 80k tokens was −3.9 [−11.1, +2.6] points against k320q34. The distilled
+build verified a little more often (0.825 vs 0.788 of sessions) at lower precision (0.485 vs 0.536), after fewer tool
+calls (7.3 vs 9.7 per session): it committed earlier to wrong programs. The bar, set before the run, was +2.5 points,
+so the shipped model does not use it.
+
+**Data.** The step-1 traces (`$W/traces`, `$W/traces_long`): 1,040 sequences on 480 training tasks, one direct and
+one REPL attempt per test input. `student/prep_recs.py` (step 6.0) turns them into records:
+- only generated tokens are trained: the prompt, tool responses and the `<|im_start|>assistant\n<think>\n` headers of
+  later turns are masked;
+- it stops if a record comes from an ARC-AGI-2 evaluation task;
+- records of the 48 held-out capture tasks (step 2) form the validation split.
+
+Training uses all 938 training-split records (469 REPL and 469 direct on 432 tasks; 6.1M and 11.8M generated
+tokens), cut at 24,576 tokens. Validation uses the first 8 REPL and the first 8 direct held-out records in key order,
+cut at 16,384 tokens (86k and 66k generated tokens).
+
+**Teacher.** The FP8 model on stock vLLM 0.30, TP2 with expert parallelism and no MTP (`kd/serve_teacher.sh`).
+`kd/dump.py` sends each record as token ids with `max_tokens=1` and `prompt_logprobs=20`, and saves the raw top-20
+log-probs of every position after the prompt.
+
+**Student and trainable set.** The step-6 student (`student/student_fn.py`) on k320q34's codes. As in RL, only the
+log-offsets of the per-group scales of the kept experts (589.8M) and the kept router rows (39.3M) train. Norms are
+supported (`--trainable scales,router,norms`), but serving them needs a loader hook, so they were off.
+
+**Loss.** At every generated position, the forward KL(teacher ‖ student) over 21 bins: the teacher's top-20 tokens
+plus the remaining mass. Tool-call spans (`<tool_call>` to `</tool_call>`) weigh ×2 and direct-mode sequences ×0.5.
+Gradients are summed over the step and divided by its total weight. Validation reports the unweighted KL per
+generated token and the top-1 agreement, REPL and direct separately.
+
+**The run's settings.**
+- 16 single-GPU data-parallel replicas with one sequence each: 16 sequences and about 180k generated tokens per step;
+- sequences cut at 24,576 tokens; 150 steps (2.6 epochs);
+- Adam with β = (0.9, 0.99) and ε = 1e-10 on fp32 masters; learning rate 5e-4 for the scales and 2e-5 for the router;
+- 10 linear warm-up steps, then cosine with a floor at 5% of the peak;
+- validation every 25 steps; seed 0.
+
+`train_kd.py`'s defaults are these values except `--len` (32,768), `--steps` (300), `--val-n` (16) and
+`--eval-every` (50), so the command passes the run's values. The batch order depends only on `--seed`: 8 replicas
+with `--accum 2` see the same 16 sequences per step as the run's 16 replicas.
+
+```bash
+# 10.1 teacher dumps: four TP2 servers on 8 GPUs (wait until they answer); rerun dump.py to fill in failed requests
+NGPU=8 bash training/kd/serve_teacher.sh &
+python3 training/kd/dump.py $W/student/recs.jsonl $W/kd/teacher \
+  --endpoints 127.0.0.1:8000,127.0.0.1:8001,127.0.0.1:8002,127.0.0.1:8003
+# 10.2 floor: the student's forward with the original 512 FP8 experts per layer (2 GPUs, full checkpoint)
+python3 training/kd/train_kd.py --out $W/kd/floor --src fp8 --gpus 0,1 --val-n 8 --eval-only
+# 10.3 training on top of step 6.0 ($W/dense, n-gram table, records); every run logs k320q34 at step 0
+KD_OUT=$W/kd/run KD_NREP=8 KD_ARGS="--len 24576 --steps 150 --accum 2 --val-n 8 --eval-every 25" \
+  bash training/kd/train_kd.sh
+python3 training/student/export_build.py $W/kd/run/trained.pt $W/builds/k320q34 $W/builds/k320q34_kd   # or KD_EXPORT
+```
+
+| Validation KL (held-out) | step 0 = k320q34 | 25 | 50 | 75 | 100 | 150 | floor |
+|---|---|---|---|---|---|---|---|
+| REPL | 0.0444 | 0.0348 | 0.0334 | 0.0327 | 0.0324 | 0.0324 | 0.0112 |
+| direct | 0.0098 | 0.0078 | 0.0074 | 0.0072 | 0.0071 | 0.0071 | 0.0022 |
+
+The floor is the student's own forward with the original FP8 experts. Above it, the KL fell by 36% on both REPL
+(0.0332 → 0.0212) and direct sequences, with a plateau after about 75 steps. REPL top-1 agreement went from 93.1% to
+93.9% (floor 96.4%).
+
+**Evaluation.** The export changes only the trunk's fp16 scales and router rows, and its `ovr/` carries the trained
+router rows that `plugin/fnplug.py` loads. Two checks:
+- **Served KL.** No-MTP servers of both builds dump the held-out records, and `served_kl.py` compares each dump with
+  the teacher's. A teacher token outside the build's top 20 gets the build's 20th log-prob, so the KL is a lower
+  bound, computed the same way for both builds. On 10 held-out REPL records (71k generated tokens) it fell from
+  0.0390 to 0.0271 (−31%, top-1 93.9% → 94.8%), in line with the −27% of the validation KL. Export and serving work
+  as intended.
+- **REPL gate.** Step-5 servers (MTP 3) and the step-9 tools with the harness settings of that time: default prompt,
+  no `ak` library, holdout40 only, ×4 per seed. Seeds 2 and 3 for the distilled build, seeds 0 and 1 for k320q34.
+
+```bash
+# served KL (the published numbers: 10 records, see "Provenance and caveats")
+bash training/kd/serve_nomtp.sh $W/builds/k320q34 0,1 8000 > $LOGDIR/nomtp_base.log 2>&1 &
+bash training/kd/serve_nomtp.sh $W/builds/k320q34_kd 2,3 8001 > $LOGDIR/nomtp_kd.log 2>&1 &
+V="--split val --max-len 16384"
+python3 training/kd/dump.py $W/student/recs.jsonl $W/kd/served_base --endpoints 127.0.0.1:8000 $V
+python3 training/kd/dump.py $W/student/recs.jsonl $W/kd/served_kd --endpoints 127.0.0.1:8001 $V
+python3 training/kd/served_kl.py $W/kd/teacher $W/kd/served_base $W/kd/served_kd
+# REPL gate (servers of the distilled build; the same pools from k320q34 servers go to $W/pools/h40_base_s0, _s1)
+BUILD=$W/builds/k320q34_kd NGPU=4 bash training/serve/serve_node.sh &
+for s in 2 3; do
+  python3 training/harness/pool.py --endpoints 127.0.0.1:8000,127.0.0.1:8001 --model-dir $FN_BASE_MODEL \
+    --split $ARC_DATA/evaluation --tasks @training/eval/holdout40.txt --arms repl:4 --concurrency 48 --seed $s \
+    --out $W/pools/h40_kd_s$s
+done
+python3 training/eval/paired_diff.py --build $W/pools/h40_kd_s2 $W/pools/h40_kd_s3 \
+  --ref $W/pools/h40_base_s0 $W/pools/h40_base_s1 --budgets 50000,80000,100000,118000
+python3 training/eval/fmt_check.py $W/pools/h40_kd_s2 $W/pools/h40_kd_s3 $W/pools/h40_base_s0 $W/pools/h40_base_s1
+```
+
+| Distilled minus k320q34, holdout40 REPL ×8 (`repl_nostop`, cap 81,920) | 50k | 80k | 100k | 118k |
+|---|---|---|---|---|
+| pass@2 difference, points [95% CI] | −2.6 [−9.0, +3.2] | **−3.9 [−11.1, +2.6]** | −4.5 [−12.2, +2.6] | −4.3 [−12.3, +2.9] |
+
+`fmt_check.py`: no-code tool-format errors fell from 0.9% to 0.1% of calls. Rest80 was not run.
+
+**Hardware and time.**
+- Teacher dumps: four TP2 servers on 8 H200, about 25 min for the 25.5M tokens (16-18k tokens/s).
+- Training: 16 H200, one replica each. Peak memory 94-101 GB at 24,576 tokens. About 22 s per step, 63 min for the
+  run including validation (2 replicas with `--accum 8`: about 2.5 min per step). A replica loaded in 27 s from
+  node-local copies of `$W/dense` and the build's `lowbit-*`, `router-*` and `keep.*` files (the note in step 6
+  applies). The n-gram table needs about 51 GB of RAM per machine.
+- Export: CPU only, a few minutes. The served-KL check and the gate use 2-4 GPUs per build.
+
 ## Script reference
 
 The Python files had their comments and docstrings removed for release, so this table is their documentation.
@@ -592,6 +702,11 @@ The Python files had their comments and docstrings removed for release, so this 
 | `draft_head/mtp_torch.py`, `accept.py`, `train.py` | the PyTorch MTP layer; offline acceptance (`--dump DIR --k 3|4 --delta CKPT`); training (options in step 8.4) |
 | `draft_head/export.py make|build|check`, `check_exact.py`, `vacc.py`, `test_mtpft.py`, `vocab_stats.py` | delta export/rebuild/check; exactness against vLLM's drafter; closed-loop acceptance; unit tests; hot vocabulary |
 | `eval/score.py`, `policy_sim.py`, `paired_diff.py`, `fmt_check.py`, `cmp_builds.py`, `holdout40.txt` | see step 9 and step 4 |
+| `kd/serve_teacher.sh` | step 10 teacher: `NGPU/TP` servers of the FP8 model without MTP, `--max-logprobs 20`, seeds 3000+i (env `NGPU`, `TP`, `GPU0`, `PORT0`, `SEQS`, `MBT`) |
+| `kd/dump.py RECS OUT --endpoints H:P,...` | top-20 prompt log-probs of each record → `OUT/<key>.npz` (`ids`, `plen`, `gen` spans, `top_ids`, fp16 `top_lp` for every position after the prompt); `--split train,val --mode repl,direct --max-len 65536 --conc 3` (per endpoint); skips existing outputs |
+| `kd/train_kd.py` | `--data DUMPS --recs RECS --build DIR --model DENSE --out DIR --len --steps --accum --val-n --eval-every [--resume trained.pt] [--eval-only] [--src fp8]` → `trained.pt` (saved at every validation), `log.jsonl` |
+| `kd/train_kd.sh` | launcher + export (env `KD_OUT`, `KD_ARGS`, `KD_NREP`, `KD_GPR`, `KD_BUILD`, `KD_EXPORT`, `DENSE`, `KD_NNODES`, `KD_NODE_RANK`, `MASTER_ADDR`) |
+| `kd/serve_nomtp.sh BUILD GPUS PORT`, `kd/served_kl.py TEACHER_DIR BUILD_DIR...` | served-KL check: one no-MTP server of a build; per-mode KL and top-1 agreement of each build's dump against the teacher's |
 
 ## Provenance and caveats
 
@@ -614,6 +729,29 @@ The Python files had their comments and docstrings removed for release, so this 
 - A delta only applies to the build it was made against (`delta_build.py` checks the expert ids). The traces and
   captures are sampled, so a rebuilt k320q34 differs from the published one and needs its own RL rounds and draft
   head. To start from the shipped weights, use the published base build instead (see `../kaggle/`).
+- Step 10 (distillation, not shipped):
+  - This code was checked against the run's files. `prep_recs.py` rebuilds the records byte for byte, and
+    `export_build.py` on the run's final `trained.pt` rebuilds every file of the distilled build except
+    `README.md`. `served_kl.py`, `paired_diff.py` and `fmt_check.py` give the numbers above from the run's dumps
+    and pools. Serving the distilled build with `serve_nomtp.sh` and dumping the same 10 records again gave a served
+    KL of 0.0270 (published: 0.0271). Two replicas with `--accum 8` train on the run's 16 sequences per step: the
+    same token counts per step, and a step-1 KL of 0.02789 against the run's 0.02795.
+  - The student's forward is not bit-reproducible on GPU, so the validation KL of the same weights moves in the
+    fourth decimal between runs. Reruns of this code and of the run's own code gave a REPL KL of 0.04411-0.04445
+    for k320q34 (logged: 0.04436) and 0.03224-0.03234 for the final weights (logged: 0.03236). With PyTorch's
+    deterministic algorithms on (`torch.use_deterministic_algorithms(True, warn_only=True)` and
+    `CUBLAS_WORKSPACE_CONFIG=:4096:8`), four reruns on k320q34, two with each code, gave identical numbers.
+  - Teacher dumps are not bit-reproducible either. Re-dumping 4 records (2 REPL, 2 direct) on a fresh server gave
+    97.8% top-1 agreement with the original dumps and a KL of 0.0078 (REPL) and 0.0020 (direct) between the two.
+    That is close to the student's floor, which suggests that much of the floor is the teacher's own noise.
+  - The gate's k320q34 pools were sampled 10-12 hours before the distilled build's, not at the same time as step 9
+    asks.
+  - All four gate pools used Kaggle's copy of the evaluation tasks (the competition's evaluation challenges with their
+    solutions, one file per task). It differs from the GitHub copy in 3 of the 40 holdout tasks: `abc82100`,
+    `d8e07eb2` and `faa9f03d`.
+  - The published served-KL numbers cover the first 10 held-out records that both dumps finished: the run's
+    `dump.py` stopped at a record whose prompt is longer than `--max-len`. The released `dump.py` skips such records,
+    so a rerun covers the others too.
 - Third-party code: `harness/probe/direct.py` contains the prompt template and two answer parsers of
   github.com/arcprize/arc-agi-benchmarking (MIT License). `rl/make_pool_comp.py` imports RE-ARC's generators and
   verifiers at run time (Apache-2.0; not included).

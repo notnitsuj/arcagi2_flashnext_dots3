@@ -4,11 +4,13 @@ Code, notebooks and build recipes for our ARC Prize 2026 solution. We ran two la
 
 | Folder | Model | Public leaderboard | Contents |
 |---|---|---|---|
-| [`flashnext/`](flashnext/README.md) | Qwen3.8-Flash-Next (125B MoE): a program-writing agent, Oct 27 to Nov 2 | **75.69** (RC8), 15th of 3,626 teams at the close; the final bundle RC9 scored 73.89 | RC8 and RC9 notebooks, code dataset, engine plugin, agent, build tools, training recipe (pruning, GPTQ, RL, draft head) |
-| [`dotsnote/`](dotsnote/README.md) | Dots3-Note (280B MoE, 16B active): direct answers, Oct 6 to 26 | **63.47** | notebook presets for our best-scoring and our fastest build, runtime dataset, engine plugin, build tools, compression and fine-tuning recipe |
+| [`flashnext/`](flashnext/README.md) | Qwen3.8-Flash-Next (125B MoE): a program-writing agent, Oct 27 to Nov 2 | **75.69** (RC8), 15th of 3,626 teams at the close; the final bundle RC9 scored 73.89 | RC8 and RC9 notebooks, code dataset, engine plugin, agent, build tools, training recipe (pruning, GPTQ, RL, draft head; also the distillation we tried and did not use) |
+| [`dotsnote/`](dotsnote/README.md) | Dots3-Note (280B MoE, 16B active): direct answers, Oct 6 to 26 | **63.47** | notebook presets for our best-scoring and our fastest build, runtime dataset, engine plugin, build tools, compression and fine-tuning recipe (also the distillation we tried and did not use) |
 | [`docs/`](docs/) | | | the writeup as published on Kaggle ([`docs/writeup.md`](docs/writeup.md)), the appendix with recipes, hyperparameters and negative results ([`docs/appendix.pdf`](docs/appendix.pdf), source [`docs/appendix.tex`](docs/appendix.tex)), and the figures |
 
 Read the writeup first.
+
+**Added after the deadline (2026-11-10):** the distillation trainers of both models, which neither submission uses. See step 10 of the training READMEs: [Flash-Next](flashnext/training/README.md#10-distillation-toward-the-fp8-model-not-used) and [Dots3-Note](dotsnote/training/README.md#10-distillation-toward-the-fp8-preview-not-used). The repository as of the open-source deadline is commit [`67ebe69`](https://github.com/notnitsuj/arcagi2_flashnext_dots3/tree/67ebe69).
 
 ## Flash-Next in brief
 

@@ -36,6 +36,7 @@ every stage ──(6) served with the 4×L4 numerics on H100s ──(8) holdout4
 | 3, 5: pruning and assembly | CPU only |
 | 6, 8: evaluation servers (lb144r with the 4×L4 numerics) | holdout40: 4 GPUs (TP4, 26 GiB budget each); validation runs and fine-tune data: 2 GPUs (TP2, 66 GiB budget) |
 | 7: fine-tune training | 3 × H100 80 GB, one layer pipeline (peak 61–67 GB per GPU): 9.8 h for the shipped run |
+| 10 (not used): distillation | teacher and on-policy student servers: 4 × H100 80 GB (TP4); training: one layer pipeline, 5 × H100 80 GB in our rounds, 4 with this folder's student |
 
 - **Host memory.** The evaluation server keeps the sparse-attention KV rows in shared, pinned host memory
   (`/dev/shm`). We capped each server at 300 GB of host RAM.
@@ -68,8 +69,11 @@ PyTorch 2.13.0 for CUDA 13.0, Triton 3.7.1, FlashInfer 0.6.18.post1, transformer
   - `finetune/select_sft.py` asserts that no selected trace belongs to a validation or evaluation task. It also drops
     every trace whose task shares an input grid (exact hash) with a validation or evaluation task; 9 traces were
     dropped.
+  - The distillation of step 10 (not used) samples and scores training tasks only. `distill/tasks.py` and
+    `distill/teacher_dump.py` assert that no evaluation id is used.
   - Apart from these exclusion checks, evaluation tasks are read only by the evaluation tools: holdout40, the prompts
-    of the degeneration test, and the optional KL bench.
+    of the degeneration test, and the optional KL bench, whose traces the trainer can also score for measurement
+    (`--fid`, step 10).
 
 ### Environment variables
 
@@ -79,7 +83,7 @@ the directory you run from, and all commands below run from the `dotsnote/` fold
 | Variable | Default | Meaning |
 |---|---|---|
 | `D3_BASE_MODEL` | `models/dots3-note-prev-fp8` | local copy of the FP8 preview (weights, config, tokenizer) |
-| `D3_WORK` | `work` | all outputs: `calib/`, `calib_acts/`, `reap_scores.pt`, `stats_reapsum.pt`, `lb144r/`, `gptq/`, `ft/`, `gate/`, `hold/`, `overlay/`, `fid/`, `masks/`, `w8a8_cfg/`, `logs/` |
+| `D3_WORK` | `work` | all outputs: `calib/`, `calib_acts/`, `reap_scores.pt`, `stats_reapsum.pt`, `lb144r/`, `gptq/`, `ft/`, `gate/`, `hold/`, `overlay/`, `fid/`, `masks/`, `w8a8_cfg/`, `kd/`, `logs/` |
 | `ARC_DATA` | `data/ARC-AGI-2/data` | ARC-AGI-2 `training/` and `evaluation/` |
 | `D3_LB144R` | `$D3_WORK/lb144r` | the lb144r checkpoint that the fine-tune, the overlay export and the evaluation commands start from (the one built in step 5, or the published one: see step 5) |
 | `D3_ENGINE` | `../engine` (next to this folder) | the folder that holds `arcstats_pkg/`; `gptq_experts.py` imports the packer and `export_delta.py` the overlay from it |
@@ -513,7 +517,7 @@ TEMP=0.6 bash $T/eval/gate.sh t06 $D3_LB144R          # temperature control
 ### 9. What did not work
 
 - **Distillation toward the FP8 preview** (KL on its top-20, same trainable set as p1s): lower KL, but −4.0 and −0.8
-  holdout points in its two rounds (5–11 runs per arm, both intervals include 0).
+  holdout points in its two rounds (5–11 runs per arm, both intervals include 0). Step 10 has the details and the code.
 - **More rounds of shortest-correct self-distillation** (more tasks, 128k caps with forced conclusions,
   below-median-length selection): −2.6 to −7.4 points at full budget on 4×L4. Each round committed earlier and more
   often wrongly.
@@ -530,6 +534,171 @@ TEMP=0.6 bash $T/eval/gate.sh t06 $D3_LB144R          # temperature control
 - **Refitting the router rows for the kept experts:** held-out MoE error got worse, because the top-8 selection flips.
 - **Lower sampling temperature instead of a fine-tune:** no token saving (step 8).
 - **Fine-tuning the MTP layer on p1s rollouts:** +0.2% accepted tokens.
+
+### 10. Distillation toward the FP8 preview (not used)
+
+Two rounds trained the tensors of p1s toward the FP8 preview's next-token distribution instead of toward answers. Both
+lowered the KL to the preview, but neither gained solve rate, so no distilled checkpoint was shipped.
+
+| | Teacher-text round | On-policy round |
+|---|---|---|
+| Training text | the preview's answers to training tasks | the first round's answers to training tasks |
+| Validation KL (held-out training tasks) | 0.0146 → 0.0113 (−22%) | 0.01325 → 0.01203 (−9%) |
+| KL bench on the serving stack (lb144r: 0.0154) | 0.0128 | 0.0133 |
+| holdout40 (lb144r: 11 runs, 61.7%) | 6 runs, 57.7% | 5 runs, 60.9% |
+| Difference to lb144r, 90% CI | −4.0 [−11.7, +3.1] | −0.8 [−7.5, +5.9] |
+| Mean tokens per attempt (lb144r: 115k) | 122k | 120k |
+
+- The intervals come from `eval/arm_stats.py`, which resamples runs within each arm and then tasks, because a single
+  holdout run varies by about 5 points. On our run files it reproduces both intervals.
+- Per token, the first round's checkpoint was closer to the preview everywhere we measured, including holdout
+  rollouts up to 172k tokens. What changed was style: both rounds took over the preview's habit of marking mismatches
+  and re-checking, and wrote 4–6% more tokens per attempt, which costs throughput under the time limit.
+
+**10.1 Data** (training split only).
+- `distill/tasks.py` drops the training tasks that share an input grid with an evaluation task (none at commit
+  `f3283f7`), shuffles the other training ids with `random.Random(0)`, and takes 560 tasks for training and the next 40
+  for validation. It asserts that no listed id is an evaluation id.
+- **Teacher generations.** The preview answers each of the 647 test inputs of these 600 tasks once in direct mode
+  (`harness/direct.py`: T 0.7, top-p 1.0, 7,168-token cap). Our run made 629 generations on 586 tasks, with 3.55M
+  completion tokens (236 correct). One prompt (24,458 tokens) does not fit the 20,480-token context, and we stopped the
+  run before the last 17 inputs. The first 62 generations came from a server without CUDA graphs, 37 of them with a
+  12,288-token cap.
+- **Calibration traces.** `distill/calib_traces.py` adds the preview's traces of step 1. Their prompts carry no task
+  id, so it finds the task by grid hash: the first grid of the prompt, in JSON form, that is an input grid of a task (a
+  grid shared by several tasks maps to the first id in sorted order). It skips traces that match no task, an evaluation
+  task or a validation task. That keeps the 24 direct-mode traces of training tasks; the 40 program-synthesis traces
+  write their grids as rows of digits and match nothing. The 24 are in both `calib_mix.jsonl` and `direct_text.jsonl`,
+  so they enter twice: 48 sequences.
+- **Teacher targets.** `distill/teacher_dump.py` sends each sequence (prompt + completion, truncated to 10,240 tokens)
+  to the teacher with `prompt_logprobs=20`, and stores the top-20 token ids and log-probabilities at every position.
+  It skips sequences that keep at most 16 completion tokens in the window (33 generations), and it refuses evaluation
+  ids. That gives 644 sequences (596 generations and the 48 traces), 4.6 GB.
+- **Validation.** The 39 sequences of the validation tasks are held out, and the trainer scores the first 16 (64,670
+  positions). That leaves 605 training sequences with 2.82M completion tokens.
+- **Leak control.** Only training tasks are sampled and scored, and none shares an input grid with an evaluation task.
+  The trainer's `--fid` option scores the six evaluation-task traces of the KL bench (step 8) for measurement only;
+  they are never trained on.
+
+**10.2 Teacher.** The FP8 preview on 4 H100s (TP4) with FlashAttention 2, FP8 KV cache, portable sparse attention
+(`ARC_DOTS3_PORTABLE_DSA=1`), CUDA graphs, no MTP, memory utilization 0.95 and a 20,480-token context.
+- Without CUDA graphs the server was slower (180–250 tokens/s), and at utilization 0.97 it ran out of memory on a
+  prompt-logprobs request.
+- On H100s, vLLM's DeepGEMM path re-quantizes the block-FP8 weights to power-of-two scales. The teacher of the
+  on-policy round ran without it (`VLLM_USE_DEEP_GEMM=0`). On the KL bench's traces, the preview with and without it
+  differs by a KL of 0.0043.
+
+**10.3 Student, trainable set and loss.**
+- The student is `finetune/student.py` with the trainable set of p1s (step 7.4): the expert scale offsets, the
+  RMSNorms and the router rows, 1,228,137,856 parameters. Norms and router are trained in bf16, without the fp32
+  masters of p1s (`--fp32-master` is 0 by default with `--loss kd`).
+- **Loss** (`train.py --loss kd`): on every completion position, KL(teacher ‖ student) over 21 bins, the teacher's
+  top-20 tokens and the remaining mass (1 minus the probability of those 20 tokens, on each side). It is summed over
+  the positions of one sequence per step; sequences are truncated to `--len`. Optimizer and schedule are those of p1s:
+  Adam (0.9, 0.99), 10 warm-up steps, then cosine to 0.
+- **Validation:** the same KL on the held-out sequences and, with `--fid REF.npz`, the KL to a KL-bench reference on
+  the first 8,192 tokens of its six traces. Evaluations are at T 1; `--temp` (both rounds: 1) would train both sides
+  at another temperature.
+
+**10.4 Settings of the two rounds.**
+
+| | Teacher-text round | On-policy round |
+|---|---|---|
+| Starts from | lb144r | the teacher-text round's `trained.pt` |
+| Sequences: training / validation | 605 / 16, 2.82M completion tokens | 604 / 24, 4.93M completion tokens |
+| Sequence length (`--len`) | 10,240 | 16,384 |
+| Steps | 450 (0.74 epoch) | 250 scheduled; the state at step 200 is the result |
+| Learning rates: scales / norms / router | 5e-4 / 5e-5 / 1e-5 | 2.5e-4 / 2.5e-5 / 5e-6 |
+| Evaluation | every 75 steps; `--fid` reference from the preview as in step 8 | every 50 steps; `--fid` reference without DeepGEMM |
+| Time on 5 H100 80 GB (one layer pipeline) | 2.5 h, about 19 s per step | 1.6 h to step 200, about 24 s per step |
+
+- **On-policy data** (`distill/onpolicy_data.sh`). The first round's exported checkpoint, served with the evaluation
+  numerics (TP4, 26 GiB budget, MTP-3), answers the 647 test inputs once at T 0.7 with a 14,336-token cap (63 min).
+  The preview without DeepGEMM (TP4, 172,032-token context, utilization 0.97, 8 sequences, 1,024-token prefill chunks)
+  then scores these rollouts, truncated to 22,528 tokens: 646 sequences, 42 of them on validation tasks. The trainer
+  truncates them again to 16,384 tokens.
+- Our on-policy run stopped at step 202, on a sequence whose prompt filled the whole 16,384-token window. The trainer
+  now skips such windows, which leaves the earlier steps unchanged. The result was the `trained.pt` written at the
+  step-200 evaluation; a full run overwrites it at step 250, so copy it when `log.jsonl` reaches step 200.
+
+**10.5 Commands.**
+
+```bash
+python3 $T/distill/tasks.py                           # -> $W/kd/tasks_{train,val,all}.txt
+python3 $T/distill/calib_traces.py                    # -> $W/kd/calib_text.jsonl, 48 sequences (needs step 1's traces)
+ARC_DOTS3_PORTABLE_DSA=1 UTIL=0.95 bash $T/serve/serve.sh 0,1,2,3 8461 $D3_BASE_MODEL --tensor-parallel-size 4 \
+  --language-model-only --trust-remote-code --disable-custom-all-reduce --kv-cache-dtype fp8 --max-model-len 20480 \
+  --max-num-seqs 32 --max-num-batched-tokens 8192 --attention-config '{"flash_attn_version": 2}' \
+  --compilation-config '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[4,8,16,32]}' > $LOGDIR/teacher.log 2>&1 &
+up $LOGDIR/teacher.log
+python3 $T/harness/direct.py --ports 8461 --split training --tasks @$W/kd/tasks_all.txt --attempts 1 --max_tokens 7168 \
+  --max_model_len 20480 --concurrency 9 --out $W/kd/gen.jsonl --save_text $W/kd/gen_text.jsonl
+cat $W/kd/calib_text.jsonl $W/kd/gen_text.jsonl > $W/kd/all_text.jsonl
+python3 $T/distill/teacher_dump.py 8461 $W/kd/all_text.jsonl $W/kd/teacher --len 10240 --conc 2 --tag x
+bash $T/serve/kill_server.sh 8461 0,1,2,3
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3,4 python3 $T/finetune/train.py --loss kd \
+  --data $W/kd/teacher --val-tasks $W/kd/tasks_val.txt --gpus 0,1,2,3,4 --len 10240 --steps 450 --lr 5e-4 \
+  --lr-norm 5e-5 --lr-router 1e-5 --trainable scales,norms,router --eval-every 75 --max-val 16 \
+  --fid $W/fid/ref.npz --fid-len 8192 --out $W/kd/run           # -> log.jsonl, trained.pt
+bash $T/finetune/build_ckpt.sh $W/kd/run                        # -> $W/kd/run/ckpt
+bash $T/distill/onpolicy_data.sh $W/kd/run/ckpt onp 14336       # -> $W/kd/onp_onp.jsonl, $W/kd/teacher_onp/
+CUDA_VISIBLE_DEVICES=0,1,2,3,4 python3 $T/finetune/train.py --loss kd --data $W/kd/teacher_onp \
+  --val-tasks $W/kd/tasks_val.txt --gpus 0,1,2,3,4 --len 16384 --steps 250 --eval-every 50 --lr 2.5e-4 \
+  --lr-norm 2.5e-5 --lr-router 5e-6 --trainable scales,norms,router --resume $W/kd/run/trained.pt \
+  --fid $W/fid/ref.npz --fid-len 8192 --out $W/kd/run_onp       # keep the trained.pt of step 200
+bash $T/finetune/build_ckpt.sh $W/kd/run_onp
+```
+
+- `--fid` needs the reference of the KL bench (step 8); leave it out to skip the measurement. For the on-policy round
+  we dumped that reference from a preview server with `VLLM_USE_DEEP_GEMM=0`.
+- The KL bench and holdout40 then run as in step 8; for the KL bench we served the checkpoints with `serve_eval.sh`'s
+  defaults. Our holdout arms ran interleaved. Give every run its own server seed (`SEED`): two fresh servers with the
+  same seed replayed one of our runs exactly.
+
+```bash
+bash $T/serve/serve_eval.sh 0,1,2,3 8155 $W/kd/run/ckpt > $LOGDIR/fid_kd.log 2>&1 &
+up $LOGDIR/fid_kd.log && python3 $T/eval/fidelity.py dump 8155 $W/fid/kd.npz && bash $T/serve/kill_server.sh 8155 0,1,2,3
+python3 $T/eval/fidelity.py cmp $W/fid/ref.npz $W/fid/lb144r.npz $W/fid/kd.npz
+for i in 1 2 3 4 5 6; do SEED=$i SFX=_s$i bash $T/eval/holdout.sh kd:$W/kd/run/ckpt lb144r:$D3_LB144R; done
+python3 $T/eval/arm_stats.py lb144r=$(ls $W/hold/lb144r_s?.jsonl | paste -sd,) kd=$(ls $W/hold/kd_s?.jsonl | paste -sd,)
+```
+
+**10.6 Hardware and time.**
+- Teacher: 4 H100 80 GB (TP4). The generations took about 2 h at about 470 tokens/s, the dump 13 min (about 1.5 s per
+  sequence).
+- Training: 5 H100 80 GB in one layer pipeline. Our rounds ran an earlier version of `student.py` that kept the expert
+  codes as uint8 (about 35 GB of weights per GPU). This one keeps them packed: on 4 GPUs it holds 17–19 GB of weights
+  per GPU and peaked at 32 GB with 10,240-token sequences.
+- On-policy data: 63 min of student rollouts and about 25 min of teacher scoring, on 4 H100s.
+- Each export takes 66 GB (`build_ckpt.sh` copies lb144r).
+
+**10.7 Checks of this release.** The data, dumps and checkpoints of the two rounds were not kept. We checked the tools
+as follows:
+- **Data.** On the ARC-AGI-2 data and our calibration traces, `tasks.py` and `calib_traces.py` match our dump logs:
+  the names and token counts of all 48 calibration sequences, and 39 and 42 dumped sequences on validation tasks, which
+  leave the 605 and 604 training sequences of our two training logs.
+- **Step-0 KL.** On lb144r, against the KL-bench reference of our rounds (`--fid-len 8192`), the trainer's first
+  evaluation gives the logged values of both rounds to the last digit: KL 0.01266134075820446 and top-1
+  0.9736111111111111 over 14,400 positions.
+- **Same steps as our rounds.** With the commands of 10.5 on 4 H100s, we made a small set: 12 teacher generations and
+  2 calibration traces, 13 sequences after the dump; `onpolicy_data.sh` added 4 on-policy sequences of 4 training
+  tasks. The released `train.py` and `student.py` and the versions that ran the on-policy round (the first round's
+  `train.py` lacked only `--temp` and the guards for prompt-only windows) then trained 6 steps with the first round's
+  settings, and 4 more from that state with the on-policy round's settings (16,384-token windows). Every training,
+  validation and fidelity KL in the logs and every trained tensor (1,228,137,856 values) came out bit-identical.
+- **Cross-entropy unchanged.** With the p1s settings, this `train.py` and its earlier cross-entropy-only version give
+  the same held-out split, the same step-0 cross-entropy (0.13551295847211323 over 134,814 tokens), and bit-identical
+  tensors after 3 training steps.
+- **Export.** `build_ckpt.sh` writes the trained norms and router rows exactly and the scales by its formula, and
+  `--resume trained.pt` reproduces the trainer's own evaluation exactly. After 20 scales-only steps at lr 1e-3 (mean
+  offset 1.5e-3), the exported checkpoint keeps the trained KL: fidelity KL 0.01210 against 0.01210, validation KL
+  0.02022 against 0.02025.
+- **Offsets below fp16 resolution do not survive the export.** After the 6 warm-up steps above (mean offset 1.8e-4),
+  the trained state has validation KL 0.02058 but its export 0.02124 (step 0: 0.02128). The student dequantizes the
+  experts to bf16; tiny fp32 offsets tip exact rounding ties there (3.6% of the weights change), which the fp16 scales
+  cannot express (0.35%). While the offsets are that small (the first steps, or very small learning rates), the KL in
+  `log.jsonl` overstates what the export keeps.
+- **Holdout statistics.** On our run files, `eval/arm_stats.py` reproduces −4.0 [−11.7, +3.1] and −0.8 [−7.5, +5.9].
 
 ## Script reference
 
@@ -555,14 +724,19 @@ The Python files had their comments and docstrings removed for release, so this 
 | `finetune/gen.sh` | fine-tune data (env `GPUS`, `PORT`, `CKPT`, `L4_GIB`) |
 | `finetune/select_sft.py [--maxlen 40960 --hard-w 2 --out DIR]` | the SFT set: `<task>_<test>.npz` (`ids` = prompt + completion + end token, `plen`, `w`) and `manifest.json` |
 | `finetune/train.sh OUT` | training + `build_ckpt.sh` (env `GPUS`, `LR`, `LRN`, `LRR`, `DATA`, `CKPT`) |
-| `finetune/train.py` | `--ckpt DIR --data DIRS --gpus 0,1,2 --len 40960 --epochs 2 --lr --lr-norm --lr-router --trainable scales,norms,router --val-n 16 --eval-every 100 --out DIR [--resume trained.pt] [--export] [--eval-only]` → `log.jsonl`, `trained.pt`, `val_tasks.txt` |
+| `finetune/train.py` | `--ckpt DIR --data DIRS --gpus 0,1,2 --len 40960 --epochs 2 --lr --lr-norm --lr-router --trainable scales,norms,router --val-n 16 --eval-every 100 --out DIR [--resume trained.pt] [--export] [--eval-only]` → `log.jsonl`, `trained.pt`, `val_tasks.txt`. `--loss kd` (default `ce`): distillation on `teacher_dump.py` output, `--val-tasks FILE --steps N [--fid REF.npz --fid-len 8192] [--temp 1.0]`, sequences truncated to `--len`; fp32 masters (`--fp32-master`) are on by default only with `ce` |
 | `finetune/student.py` | the differentiable model: `Student(ckpt, gpus, trainable=("scales", "norms", "router"))`, `.hidden(ids)`, `.export_scales(out, src)`; env `DISTILL_NESTED_CKPT`, `DISTILL_NESTED_MIN`, `DISTILL_PACKED` (1), `DISTILL_ACT_FP8` (1), `DISTILL_KV_FP8` (1) |
 | `finetune/build_ckpt.sh RUN [GPU]` | full checkpoint `RUN/ckpt` from `RUN/trained.pt` (env `CKPT`) |
 | `finetune/export_delta.py RUN [--base DIR] [--out F]`, `--check [CKPT]` | overlay export; bit-exact check against the formula and, if given, a full checkpoint |
 | `finetune/overlay_check.sh TAG CKPT [DELTA]`, `overlay_check.py dump PORT OUT \| cmp A B \| prompts P` | served exactness check of an overlay (env `GPUS`, `PORT`) |
-| `eval/holdout.sh TAG:CKPT ...` | degeneration test + holdout40 (env `GPUS`, `PORT`, `LG`, `SFX`) |
+| `distill/tasks.py [--out DIR --train 560 --val 40 --seed 0]` | task lists of step 10 (`tasks_train.txt`, `tasks_val.txt`, `tasks_all.txt`): training split, no input grid shared with an evaluation task |
+| `distill/calib_traces.py [--mix F --direct F --val-tasks F --out F]` | step 1's calibration traces, mapped to training tasks by grid hash, as `teacher_dump.py` input |
+| `distill/teacher_dump.py PORT SRC.jsonl OUT [--len 12288 --conc 4 --tag t --tasks @FILE --tokenizer DIR]` | teacher top-20 prompt log-probabilities of prompt + completion: `OUT/<task>_<test>_<attempt>_<tag>.npz` (`ids`, `plen`, `top_ids`, `top_lp`); refuses evaluation ids; resumable |
+| `distill/onpolicy_data.sh CKPT TAG [MAXTOK 12288]` | on-policy data: one attempt per test input from CKPT on the evaluation server, then teacher scoring without DeepGEMM (env `GPUS`, `TASKS`, `PORT`, `TPORT`) |
+| `eval/holdout.sh TAG:CKPT ...` | degeneration test + holdout40 (env `GPUS`, `PORT`, `LG`, `SFX`, `SEED`) |
 | `eval/score_hold.py RUNS...`, `paired_diff.py "A1,A2" "B1,B2"`, `direct_score.py RUNS [--attempts 1 --caps ...]` | holdout score with a 90% CI; paired difference; pass@k under per-attempt caps |
 | `eval/degen_test.py PORT [N G]` | N holdout prompts × G tokens; counts runaway digit loops |
+| `eval/arm_stats.py NAME=RUN,RUN,... NAME=...` | holdout arms against the first one: 90% CI of a two-level bootstrap (runs within each arm, then tasks), task-only CI, run-level permutation p |
 | `eval/gate.sh TAG CKPT`, `gate_analyze.py BASE CAND` | validation run (env `GPUS`, `PORT`, `ATT`, `SEED`, `TEMP`) and its paired analysis |
 | `eval/fidelity.py dump PORT OUT.npz \| cmp REF.npz CAND.npz ...` | KL bench (`--n 6 --len 32768`; traces from `D3_FID_TRACES`) |
 
@@ -572,18 +746,23 @@ The Python files had their comments and docstrings removed for release, so this 
   - The 80 excluded tasks and the difficulty strata come from earlier runs, so `split.json` ships them as data.
   - The FP8 server flags of the calibration traces were not recorded (step 1).
   - Sampling on GPUs is not deterministic.
+  - The data, teacher dumps and checkpoints of the distillation rounds (step 10) were not kept. Their numbers come
+    from our logs and notes; step 10.7 lists what we checked.
 - **What was reproduced exactly.** From the shipped intermediate files, the tools of this folder reproduce:
   - the calibration mix;
   - the ranking file and `pruning.json`;
   - the SFT set, and the trainer's held-out split and step-0 cross-entropy;
   - the validation analysis and the KL table;
-  - `p1s_delta.safetensors`, byte for byte.
+  - `p1s_delta.safetensors`, byte for byte;
+  - for step 10: the calibration sequences and the sequence counts of both distillation rounds, the trainer's step-0
+    KL, and the two holdout intervals.
 
   The keep sets and the 3/2-bit allocation of all 45 shipped layers follow the rules of steps 3 and 4. The captured
   MoE inputs were not kept, so the GPTQ run itself was not repeated.
 - **The overlay is tied to its base.** It carries the expert ids and checksums of the published lb144r's scales, and
   the engine refuses it on any other checkpoint. A rebuilt lb144r needs its own fine-tune.
-- **Versions.** `finetune/train.py` and `student.py` are the versions that trained p1s. The trainer is reduced to its
-  cross-entropy mode: its distillation mode belonged to a rejected experiment (step 9).
+- **Versions.** `finetune/train.py` and `student.py` are the versions that trained p1s; `train.py --loss kd` is their
+  distillation mode (step 10). The two distillation rounds ran earlier versions of both files. On the same data these
+  give bit-identical training steps (step 10.7).
 - **Third-party code.** `harness/direct.py` contains the prompt template and two answer parsers of
   github.com/arcprize/arc-agi-benchmarking (MIT License).

@@ -26,7 +26,7 @@ Both use the same Kaggle Model, `notnitsuj/dots3-note-lb144r` (variations `lb144
 |---|---|
 | [`kaggle/`](kaggle/README.md) | The two notebook presets, the runtime dataset's text files (launcher `run_l4.py`, solver `solve.py`, mode files, L4 tables and start-up gates) with the md5 of every published file, and the tools that rebuild every Kaggle artifact: notebook builder, dataset packer, bundle and environment builders, Model splitter and a mocked notebook test. |
 | [`engine/`](engine/) | The engine source: the vLLM plugin package `arcstats` (host-memory KV rows, host collectives, low-bit MoE and FP8 kernels, sessions, the delta overlay), its CUDA kernels with build scripts, and our patch to vLLM 0.30.0. |
-| [`training/`](training/README.md) | How the checkpoint and the delta were made: calibration traces, expert ranking and pruning, GPTQ, the fine-tune, and the evaluation protocol. |
+| [`training/`](training/README.md) | How the checkpoint and the delta were made: calibration traces, expert ranking and pruning, GPTQ, the fine-tune, and the evaluation protocol. Step 10 is the distillation we tried; the shipped checkpoint does not use it. |
 
 ## Reproducing
 
